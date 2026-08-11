@@ -4,6 +4,9 @@ This software processes RAW images and implements a calibration pipeline to deve
 -----> [Download the beta version of the software from here!](https://github.com/Riccardo-Foschi/LumExtract_PhotometricStereo/releases/download/v1.0.0/LumExtr_version1.0.0.zip) <-----  
 
 
+
+***
+
 **OPERATIVE CHECKLIST – Luminance Extractor (Photometric Stereo)**
 
 1) **Acquisition setup**
@@ -58,3 +61,9 @@ This software processes RAW images and implements a calibration pipeline to deve
 10) **Develop Luminance**
 - Run the final export with linear settings.  
 - Verify the output and log (`export_log.txt`) in the destination folder.
+
+***
+
+<img width="683" height="638" alt="image" src="https://github.com/user-attachments/assets/0357795f-e588-42dd-b771-68c22e9cfc3f" />
+
+***

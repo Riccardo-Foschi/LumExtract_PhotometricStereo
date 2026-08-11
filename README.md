@@ -64,6 +64,7 @@ This software processes RAW images and implements a calibration pipeline to deve
 
 ***
 
-<img width="683" height="638" alt="image" src="https://github.com/user-attachments/assets/0357795f-e588-42dd-b771-68c22e9cfc3f" />
+<img width="1096" height="668" alt="image" src="https://github.com/user-attachments/assets/7277381f-57f5-42fe-a888-594776a6b931" />
+
 
 ***

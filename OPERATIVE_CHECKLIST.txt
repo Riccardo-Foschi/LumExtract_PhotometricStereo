@@ -1,0 +1,71 @@
+OPERATIVE CHECKLIST - Luminance Extractor (Photometric Stereo)
+
+1) Preparazione acquisizione
+- Imposta camera in manuale completo.
+- Mantieni ISO costante e diaframma costante per tutto il dataset.
+- Mantieni fuoco, distanza e inquadratura costanti.
+- Disattiva qualsiasi elaborazione non lineare in camera.
+
+2) Preparazione dataset
+- Verifica che tutti i file input siano RAW o TIFF 16-bit lineari.
+- Verifica naming coerente tra frame input, grey card e indice luce.
+- Verifica presenza metadati ExposureTime nei file di calibrazione linearita.
+
+3) Impostazioni software consigliate
+- Output: TIFF
+- Bit depth: 16-bit
+- Color space: Linear
+- Use sharpness: OFF
+- Luminance source: Demosaic RGB mean (oppure RAW Bayer 2x2 se preferisci minimizzare effetti demosaic)
+
+4) Dark calibration
+- Usa una sola modalita per run:
+  A) RAW metadata dark level
+  B) Dark frames manuali (cap-on + cap-off)
+- Se usi dark frames manuali, acquisiscili nella stessa sessione termica.
+- Se compare clipping nero, usa Dark level overestimation check e regola Lift coefficient.
+
+5) Flatfield (opzionale)
+- Abilita flatfield solo con pairing 1:1 valido tra input e grey frames.
+- Controlla preview prima/dopo per confermare riduzione non uniformita.
+
+6) Compensazione intensita luci (opzionale ma consigliata)
+- Carica file .dome coerente con il setup.
+- Imposta correttamente lights distance (mm).
+- Salva/usa file di compensazione intensita LED.
+- Se cambi rotazione output, ricontrolla la compatibilita del file compensazione.
+
+7) Calibrazione linearita (se necessaria)
+- Usa almeno 5-7 frame con esposizioni diverse.
+- Mantieni ISO e FNumber costanti; varia solo ExposureTime.
+- Escludi campioni saturi o quasi saturi.
+- Applica LUT solo se il report indica non-linearita reale.
+
+8) Step 1 - Calculate Stretch
+- Controlla burned threshold (tipico 99%).
+- Controlla Undersample (tipico 1/32 per preview rapida).
+- Il software usa peak percentile robusto (default 99.8).
+- Il software esclude frame solo oltre burned exclusion ratio (default 0.05%).
+
+9) Verifica QA dopo Step 1
+- Apri histogram_stretch.txt e controlla:
+  - global_max
+  - peak_percentile
+  - burned_exclusion_ratio_pct
+  - median_peak
+  - p99_burned_high_pct
+  - p99_burned_black_pct
+  - frames_excluded_ratio_pct
+- Se frames_excluded_ratio_pct e alto, rivedi soglia burned o condizioni di acquisizione.
+
+10) Step 2 - Develop Luminance
+- Esegui export finale con impostazioni lineari.
+- Verifica output e log (export_log.txt) nella cartella di destinazione.
+
+11) Archiviazione run
+- Conserva insieme:
+  - output TIFF
+  - histogram_stretch.txt
+  - export_log.txt
+  - eventuali file LUT linearita e compensazione LED
+- Questo garantisce tracciabilita e ripetibilita del processo.

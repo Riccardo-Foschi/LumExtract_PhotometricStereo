@@ -1,0 +1,15 @@
+- select path bar in the folder of the .py file
+- write cmd -> enter
+- type:
+
+pyinstaller --onefile --windowed luminance_app.py
+
+
+
+or click on the "click2Build.bat" file 
+
+click2Build.bat now does this automatically:
+- uses local venv folder in the project path
+- creates venv if missing
+- installs missing Python libraries
+- runs PyInstaller build

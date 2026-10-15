@@ -16,13 +16,13 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QFrame)
 from PyQt5.QtWidgets import QSplitter
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, QEvent
-from PyQt5.QtGui import QTextCursor, QImage, QPixmap
+from PyQt5.QtGui import QTextCursor, QImage, QPixmap, QValidator
 
 
 STRETCH_PERCENT_SCALE = 1000
 
 APP_NAME = "Luminance Extractor for Photometric Stereo (Beta)"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 APP_WINDOW_TITLE = f"{APP_NAME} v{APP_VERSION}"
 
 def get_exiftool_path():
@@ -108,6 +108,61 @@ def get_embedded_dome_radius_mm(dome_path):
     if diameter_value <= 0:
         return None
     return diameter_value / 2.0
+
+
+class FileDropListWidget(QListWidget):
+    filesDropped = pyqtSignal(list)
+    _EXTS = ('.cr2', '.nef', '.arw', '.dng', '.tif', '.tiff')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setAcceptDrops(True)
+
+    def _dropped_paths(self, event):
+        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        return [p for p in paths if p.lower().endswith(self._EXTS)]
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls() and self._dropped_paths(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    dragMoveEvent = dragEnterEvent
+
+    def dropEvent(self, event):
+        paths = self._dropped_paths(event)
+        if paths:
+            event.acceptProposedAction()
+            self.filesDropped.emit(sorted(paths))
+        else:
+            event.ignore()
+
+
+class RoundingDoubleSpinBox(QDoubleSpinBox):
+    """Accepts typing extra decimals and rounds to the configured decimals."""
+
+    def validate(self, text, pos):
+        state, out_text, out_pos = super().validate(text, pos)
+        if state == QValidator.Invalid:
+            core = text
+            if self.suffix() and core.endswith(self.suffix()):
+                core = core[:-len(self.suffix())]
+            core = core.strip().replace(',', '.')
+            if re.fullmatch(r'\d*\.\d+', core):
+                value = round(float(core), self.decimals())
+                if self.minimum() <= value <= self.maximum():
+                    return QValidator.Acceptable, text, pos
+        return state, out_text, out_pos
+
+    def valueFromText(self, text):
+        core = text
+        if self.suffix() and core.endswith(self.suffix()):
+            core = core[:-len(self.suffix())]
+        try:
+            return round(float(core.strip().replace(',', '.')), self.decimals())
+        except ValueError:
+            return super().valueFromText(text)
 
 
 class EmittingStream(QObject):
@@ -439,6 +494,23 @@ class ProcessThread(QThread):
         if angle_idx == 1:
             return np.rot90(y_map, k=2)
         return np.rot90(y_map, k=1)
+
+    def _apply_crop_to_map(self, y_map, scale=1):
+        crop_x = int(self.options.get('crop_x_pixels', 0))
+        crop_y = int(self.options.get('crop_y_pixels', 0))
+        if y_map is None or (crop_x <= 0 and crop_y <= 0):
+            return y_map
+        s = max(1, int(scale))
+        cx = max(0, crop_x) // s
+        cy = max(0, crop_y) // s
+        h, w = y_map.shape[:2]
+        if 2 * cx >= w:
+            cx = 0
+        if 2 * cy >= h:
+            cy = 0
+        sx = int(np.clip(int(self.options.get('shift_x_pixels', 0)) // s, -cx, cx))
+        sy = int(np.clip(int(self.options.get('shift_y_pixels', 0)) // s, -cy, cy))
+        return y_map[cy + sy:h - cy + sy, cx + sx:w - cx + sx]
 
     def _center_patch_trimmed_mean(self, map_2d, patch_size=20):
         h, w = map_2d.shape[:2]
@@ -1089,7 +1161,7 @@ class ProcessThread(QThread):
                         dark_bayer_map=dark_bayer_map,
                         dark_lift_coeff=dark_lift_coeff,
                     )
-                return sensor_norm
+                return self._apply_crop_to_map(sensor_norm, undersample_n)
 
             self.status.emit("Preparing calibration settings...")
             self.progress.emit(5)
@@ -1328,6 +1400,8 @@ class ProcessThread(QThread):
                         dark_lift_coeff=dark_lift_coeff,
                     )
 
+                Y_norm = self._apply_crop_to_map(Y_norm, process_downsample_factor)
+
                 Y_norm = self.apply_unsharp_mask(Y_norm, sharp_radius, sharp_amount)
 
                 Y_stretched = np.clip(Y_norm / stretch_denominator, 0, 1)
@@ -1545,8 +1619,9 @@ class MainWindow(QMainWindow):
         self._pin_section_to_top(files_box)
         files_layout = QVBoxLayout(files_box)
         files_layout.setAlignment(Qt.AlignTop)
-        self.list_widget = QListWidget()
-        files_layout.addWidget(QLabel("RAW/TIFF Files (TIFF must be 16-bit linear):"))
+        self.list_widget = FileDropListWidget()
+        self.list_widget.filesDropped.connect(self._add_file_paths)
+        files_layout.addWidget(QLabel("RAW/TIFF Files (TIFF must be 16-bit linear) - drag and drop supported:"))
         files_layout.addWidget(self.list_widget)
 
         btn_layout = QHBoxLayout()
@@ -1605,7 +1680,7 @@ class MainWindow(QMainWindow):
         self.update_bit_depth_controls(self.combo_format.currentText())
         output_layout.addWidget(output_profile_box)
 
-        self.luminance_box = QGroupBox("Luminance Source")
+        self.luminance_box = QGroupBox("Demosaicing")
         luminance_layout = QVBoxLayout(self.luminance_box)
         luminance_layout.setAlignment(Qt.AlignTop)
 
@@ -1617,7 +1692,7 @@ class MainWindow(QMainWindow):
             "Demosaic RGB weighted"
         ])
         self.combo_luminance_source.setCurrentText("Demosaic RGB mean")
-        lum_top_row.addWidget(QLabel("Luminance Source:"))
+        lum_top_row.addWidget(QLabel("Demosaicing:"))
         lum_top_row.addWidget(self.combo_luminance_source)
         lum_top_row.addSpacing(18)
         self.lbl_demosaic_label = QLabel("Demosaic Algorithm:")
@@ -1660,6 +1735,36 @@ class MainWindow(QMainWindow):
         luminance_layout.addWidget(self.weighted_controls_widget)
 
         output_layout.addWidget(self.luminance_box)
+
+        self.crop_box = QGroupBox("Crop")
+        crop_layout = QHBoxLayout(self.crop_box)
+        crop_layout.addWidget(QLabel("Crop borders (px) W:"))
+        self.spin_crop_x = QSpinBox()
+        self.spin_crop_x.setRange(0, 10000)
+        self.spin_crop_x.setToolTip("Pixels removed from left and right edges (full-resolution pixels). 0 = no crop.")
+        crop_layout.addWidget(self.spin_crop_x)
+        crop_layout.addWidget(QLabel("H:"))
+        self.spin_crop_y = QSpinBox()
+        self.spin_crop_y.setRange(0, 10000)
+        self.spin_crop_y.setToolTip("Pixels removed from top and bottom edges (full-resolution pixels). 0 = no crop.")
+        crop_layout.addWidget(self.spin_crop_y)
+        crop_layout.addSpacing(18)
+        crop_layout.addWidget(QLabel("Shift (px) X:"))
+        self.spin_shift_x = QSpinBox()
+        self.spin_shift_x.setRange(0, 0)
+        self.spin_shift_x.setEnabled(False)
+        self.spin_shift_x.setToolTip("Moves the crop window horizontally. Limited to the W crop value.")
+        crop_layout.addWidget(self.spin_shift_x)
+        crop_layout.addWidget(QLabel("Y:"))
+        self.spin_shift_y = QSpinBox()
+        self.spin_shift_y.setRange(0, 0)
+        self.spin_shift_y.setEnabled(False)
+        self.spin_shift_y.setToolTip("Moves the crop window vertically. Limited to the H crop value.")
+        crop_layout.addWidget(self.spin_shift_y)
+        crop_layout.addStretch()
+        self.spin_crop_x.valueChanged.connect(self._update_shift_limits)
+        self.spin_crop_y.valueChanged.connect(self._update_shift_limits)
+        output_layout.addWidget(self.crop_box)
 
         self.sharp_box = QGroupBox("Sharpness")
         sharp_layout = QHBoxLayout(self.sharp_box)
@@ -1884,7 +1989,7 @@ class MainWindow(QMainWindow):
         self.slider_percentile.setSingleStep(1)
         self.lbl_percentile_value = QLabel("99.000%")
         self.lbl_percentile_value.setMinimumWidth(70)
-        self.edit_percentile = QDoubleSpinBox()
+        self.edit_percentile = RoundingDoubleSpinBox()
         self.edit_percentile.setRange(0.001, 100.0)
         self.edit_percentile.setDecimals(3)
         self.edit_percentile.setSingleStep(0.001)
@@ -2226,6 +2331,106 @@ class MainWindow(QMainWindow):
         self.update_grey_calibration_ui_state()
         self.on_percentile_changed(self.slider_percentile.value())
         self.disable_wheel_on_inputs()
+
+        self._default_settings = self._collect_settings()
+        self.menuBar().addAction("Save settings", self.save_settings)
+        self.menuBar().addAction("Load settings", self.load_settings_from_dialog)
+        self.menuBar().addAction("Reset to defaults", self.reset_settings)
+        self.load_saved_settings()
+
+    _SETTINGS_EXTRA_WIDGETS = ('edit_percentile', 'edit_dark_lift_coeff', 'edit_lights_distance_mm')
+    _SETTINGS_EXCLUDED_WIDGETS = ('combo_preview_mode',)
+
+    def _update_shift_limits(self):
+        for crop, shift in ((self.spin_crop_x, self.spin_shift_x), (self.spin_crop_y, self.spin_shift_y)):
+            limit = crop.value()
+            shift.setRange(-limit, limit)
+            shift.setEnabled(limit > 0)
+
+    def _settings_file_path(self):
+        base = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(base, 'settings', 'user_settings.json')
+
+    def _settings_widgets(self):
+        widgets = {}
+        for name, w in vars(self).items():
+            if name in self._SETTINGS_EXCLUDED_WIDGETS:
+                continue
+            if name.startswith(('combo_', 'spin_', 'check_')) or name in self._SETTINGS_EXTRA_WIDGETS:
+                if isinstance(w, (QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QLineEdit)):
+                    widgets[name] = w
+        return widgets
+
+    def _collect_settings(self):
+        values = {}
+        for name, w in self._settings_widgets().items():
+            if isinstance(w, QComboBox):
+                values[name] = w.currentText()
+            elif isinstance(w, QCheckBox):
+                values[name] = w.isChecked()
+            elif isinstance(w, (QSpinBox, QDoubleSpinBox)):
+                values[name] = w.value()
+            else:
+                values[name] = w.text()
+        return values
+
+    def _apply_settings(self, values):
+        for name, w in self._settings_widgets().items():
+            if name not in values:
+                continue
+            v = values[name]
+            try:
+                if isinstance(w, QComboBox):
+                    idx = w.findText(str(v))
+                    if idx >= 0:
+                        w.setCurrentIndex(idx)
+                elif isinstance(w, QCheckBox):
+                    w.setChecked(bool(v))
+                elif isinstance(w, (QSpinBox, QDoubleSpinBox)):
+                    w.setValue(v)
+                else:
+                    w.setText(str(v))
+                    w.editingFinished.emit()
+            except Exception as e:
+                print(f"Could not apply setting {name}: {e}")
+        self.on_luminance_mode_changed()
+        self.on_use_sharpness_changed()
+        self.on_linearity_toggle_changed()
+        self.update_dark_calibration_ui_state()
+        self.update_grey_calibration_ui_state()
+
+    def save_settings(self):
+        path = self._settings_file_path()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(self._collect_settings(), f, indent=2)
+            print(f"Settings saved: {path}")
+            QMessageBox.information(self, "Save settings", f"Settings saved to:\n{path}")
+        except Exception as e:
+            QMessageBox.warning(self, "Save settings", f"Could not save settings: {e}")
+
+    def load_settings_from_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load settings", os.path.dirname(self._settings_file_path()), "Settings (*.json)"
+        )
+        if path:
+            self.load_saved_settings(path)
+
+    def load_saved_settings(self, path=None):
+        path = path or self._settings_file_path()
+        if not os.path.isfile(path):
+            return
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                self._apply_settings(json.load(f))
+            print(f"Settings loaded: {path}")
+        except Exception as e:
+            print(f"Could not load settings: {e}")
+
+    def reset_settings(self):
+        self._apply_settings(self._default_settings)
+        print("Settings reset to defaults.")
 
     def _dark_files_enabled_extensions_filter(self):
         return "Images (*.cr2 *.nef *.arw *.dng *.raf *.orf *.rw2 *.raw *.tif *.tiff)"
@@ -4615,6 +4820,9 @@ class MainWindow(QMainWindow):
 
     def add_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Select RAW/TIFF", "", "Images (*.cr2 *.nef *.arw *.dng *.tif *.tiff)")
+        self._add_file_paths(files)
+
+    def _add_file_paths(self, files):
         added = False
         for f in files:
             if is_tiff_file(f):
@@ -4837,6 +5045,10 @@ class MainWindow(QMainWindow):
             'color_space': self.combo_color.currentText(),
             'luminance_mode': luminance_mode,
             'demosaic': self.demosaic_map[self.combo_demosaic.currentText()],
+            'crop_x_pixels': self.spin_crop_x.value(),
+            'crop_y_pixels': self.spin_crop_y.value(),
+            'shift_x_pixels': self.spin_shift_x.value(),
+            'shift_y_pixels': self.spin_shift_y.value(),
             'sharp_amount': self.spin_sharp_amount.value() if self.check_use_sharpness.isChecked() else 0.0,
             'sharp_radius': self.spin_sharp_radius.value(),
             'overwrite': self.check_overwrite.isChecked(),

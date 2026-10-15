@@ -16,18 +16,33 @@ set "VENV_DIR=%SCRIPT_DIR%venv"
 set "VENV_PY=%VENV_DIR%\Scripts\python.exe"
 
 echo [1/4] Verifica virtual environment locale...
-if not exist "%VENV_PY%" (
-	echo - venv non trovato. Creo %VENV_DIR%
-	where py >nul 2>&1
-	if not errorlevel 1 (
-		py -3 -m venv "%VENV_DIR%"
+if exist "%VENV_PY%" (
+	"%VENV_PY%" -c "import sys" >nul 2>&1
+	if errorlevel 1 (
+		echo - venv non funzionante ^(interprete base mancante^). Lo ricreo.
+		rmdir /s /q "%VENV_DIR%"
 	) else (
-		python -m venv "%VENV_DIR%"
+		echo - venv trovato in %VENV_DIR%
+		goto :venv_ready
 	)
-	if errorlevel 1 goto :error
-) else (
-	echo - venv trovato in %VENV_DIR%
 )
+
+echo - Creo %VENV_DIR%
+set "PY_VER="
+for %%V in (3.12 3.11 3.10 3.13 3.14 3.15) do (
+	if not defined PY_VER (
+		py -%%V -c "import sys" >nul 2>&1 && set "PY_VER=%%V"
+	)
+)
+if not defined PY_VER (
+	echo ERRORE: nessun Python 3.10-3.15 trovato ^(installa da python.org^).
+	goto :error
+)
+echo - Uso Python %PY_VER%
+py -%PY_VER% -m venv "%VENV_DIR%"
+if errorlevel 1 goto :error
+
+:venv_ready
 
 echo.
 echo [2/4] Verifica pip e aggiorna strumenti base...
@@ -51,7 +66,7 @@ echo.
 echo [4/4] Build con PyInstaller...
 if not exist "%TEMP%\luminance_app_dist" mkdir "%TEMP%\luminance_app_dist"
 if exist "%SCRIPT_DIR%dist\Luminance_Extractor_for_Photometric_Stereo.exe" del /f /q "%SCRIPT_DIR%dist\Luminance_Extractor_for_Photometric_Stereo.exe"
-"%VENV_PY%" -m PyInstaller --noconfirm --workpath "%TEMP%\luminance_app_build" --distpath "%TEMP%\luminance_app_dist" luminance_app.spec
+"%VENV_PY%" -m PyInstaller --noconfirm --clean --workpath "%TEMP%\luminance_app_build" --distpath "%TEMP%\luminance_app_dist" luminance_app.spec
 if errorlevel 1 goto :error
 
 if not exist "%SCRIPT_DIR%dist" mkdir "%SCRIPT_DIR%dist"
